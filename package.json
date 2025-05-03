@@ -1,0 +1,20 @@
+{
+  "name": "simple-gateway-project",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "npx thirdweb@latest build",
+    "deploy": "npx thirdweb@latest deploy",
+    "release": "npx thirdweb@latest release"
+  },
+  "devDependencies": {
+    "@openzeppelin/contracts": "^4.8.0",
+    "hardhat": "^2.12.0",
+    "@thirdweb-dev/contracts": "^3.8.0"
+  },
+  "dependencies": {
+    "@thirdweb-dev/sdk": "^4.0.0",
+    "@thirdweb-dev/react": "^4.0.0",
+    "ethers": "^5.7.2"
+  }
+}
