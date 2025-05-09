@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.18;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts@4.9.3/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts@4.9.3/access/Ownable.sol";
+import "@openzeppelin/contracts@4.9.3/security/ReentrancyGuard.sol";
+import "@uniswap/v2-periphery/contracts/interfaces/IUniswapV2Router02.sol";
+
 
 /**
  * @title SimpleGateway
@@ -16,7 +18,9 @@ contract SimpleGateway is Ownable, ReentrancyGuard {
     address public treasury;
     uint256 public protocolFeePercent; // Fee in basis points (100 = 1%)
     uint256 public orderIdCounter;
-    
+    IUniswapV2Router02 public immutable uniswapRouter; // Router for performing token swaps
+    address public immutable USDC; // USDC token contract address
+
     // Mapping to track supported tokens
     mapping(address => bool) public supportedTokens;
     
@@ -43,14 +47,19 @@ contract SimpleGateway is Ownable, ReentrancyGuard {
     event TokenSupportUpdated(address token, bool isSupported);
     event TreasuryUpdated(address newTreasury);
     event ProtocolFeeUpdated(uint256 newFeePercent);
+    event SwapAndCreateOrder(address inputToken, uint256 inputAmount, uint256 usdcReceived, uint256 orderId);
     
     // Constructor
-    constructor(address _treasury, uint256 _protocolFeePercent) {
+    constructor(address _treasury, uint256 _protocolFeePercent, address _uniswapRouter, address _usdc) {
         require(_treasury != address(0), "Invalid treasury address");
         require(_protocolFeePercent <= 1000, "Fee too high"); // Max 10%
+        require(_uniswapRouter != address(0), "Invalid router address");
+        require(_usdc != address(0), "Invalid USDC address");
         
         treasury = _treasury;
         protocolFeePercent = _protocolFeePercent;
+        uniswapRouter = IUniswapV2Router02(_uniswapRouter);
+        USDC = _usdc;
     }
     
     // Modifier to ensure only the aggregator can call certain functions
@@ -137,6 +146,71 @@ contract SimpleGateway is Ownable, ReentrancyGuard {
         });
         
         emit OrderCreated(orderId, _token, _amount, _rate, _refundAddress);
+    }
+    
+    /**
+     * @dev Swaps any token to USDC and then creates an order
+     * @param _inputToken The token to swap from
+     * @param _inputAmount The amount of input tokens
+     * @param _minUsdcAmount The minimum USDC amount expected after swap
+     * @param _rate The expected exchange rate for the order
+     * @param _refundAddress The address to refund tokens if needed
+     * @param _deadline The deadline for the swap transaction
+     * @return orderId The ID of the created order
+     */
+    function swapAndCreateOrder(
+        address _inputToken,
+        uint256 _inputAmount,
+        uint256 _minUsdcAmount,
+        uint256 _rate,
+        address _refundAddress,
+        uint256 _deadline
+    ) external nonReentrant returns (uint256 orderId) {
+        require(_inputToken != address(0), "Invalid input token");
+        require(_inputAmount > 0, "Input amount must be greater than 0");
+        require(_minUsdcAmount > 0, "Min USDC amount must be greater than 0");
+        require(_rate > 0, "Rate must be greater than 0");
+        require(_refundAddress != address(0), "Invalid refund address");
+        require(supportedTokens[USDC], "USDC not supported");
+        
+        // Transfer input tokens from user to this contract
+        IERC20 inputToken = IERC20(_inputToken);
+        require(inputToken.transferFrom(msg.sender, address(this), _inputAmount), "Transfer failed");
+        
+        // Approve router to spend tokens
+        inputToken.approve(address(uniswapRouter), _inputAmount);
+        
+        // Create swap path
+        address[] memory path = new address[](2);
+        path[0] = _inputToken;
+        path[1] = USDC;
+        
+        // Execute the swap
+        uint256[] memory amounts = uniswapRouter.swapExactTokensForTokens(
+            _inputAmount,
+            _minUsdcAmount,
+            path,
+            address(this),
+            _deadline
+        );
+        
+        uint256 usdcReceived = amounts[amounts.length - 1];
+        
+        // Create order with the USDC received
+        orderId = orderIdCounter++;
+        orders[orderId] = Order({
+            token: USDC,
+            amount: usdcReceived,
+            rate: _rate,
+            creator: msg.sender,
+            refundAddress: _refundAddress,
+            isFulfilled: false,
+            isRefunded: false,
+            timestamp: block.timestamp
+        });
+        
+        emit SwapAndCreateOrder(_inputToken, _inputAmount, usdcReceived, orderId);
+        emit OrderCreated(orderId, USDC, usdcReceived, _rate, _refundAddress);
     }
     
     /**
