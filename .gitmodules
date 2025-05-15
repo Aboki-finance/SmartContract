@@ -1,0 +1,3 @@
+[submodule "opencash"]
+	path = opencash
+	url = https://github.com/Svector-anu/Opencash-contracts.git
